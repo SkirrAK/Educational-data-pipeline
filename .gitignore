@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+logs/
+data/raw/*.csv
+!data/raw/.gitkeep
+.env
