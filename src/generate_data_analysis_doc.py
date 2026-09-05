@@ -41,26 +41,49 @@ RELATIONSHIPS = [
 ]
 
 
-def profile_file(display_name: str, df) -> str:
-    lines = [f"## {display_name}", ""]
-    lines.append(f"- **Rows:** {len(df):,}")
-    lines.append(f"- **Columns:** {len(df.columns)}")
+# Maps a raw source file to the pipeline table its rows end up in,
+# so validation findings (logged per-table in validate.py) can be
+# attributed back to the correct source document below.
+SOURCE_TABLE = {
+    "courses.csv": "courses",
+    "studentInfo.csv": "students",
+    "studentRegistration.csv": "enrollments",
+    "assessments.csv": "assessments",
+    "studentAssessment.csv": "results",
+}
 
-    dtype_counts = df.dtypes.astype(str).value_counts().to_dict()
-    dtype_str = ", ".join(f"{count} {dtype}" for dtype, count in dtype_counts.items())
-    lines.append(f"- **Data types:** {dtype_str}")
 
-    dup = df.duplicated().sum()
-    lines.append(f"- **Fully duplicate rows:** {dup:,}")
-    lines.append("")
+def profile_file(display_name: str, df, issues: list) -> str:
+    """Item/Description summary card for one source document."""
+    lines = [f"### Document: `{display_name}`", ""]
+    lines.append("| Item | Description |")
+    lines.append("|---|---|")
+    lines.append("| Source | OULAD (Open University Learning Analytics Dataset) |")
+    lines.append("| Format | CSV |")
+    lines.append(f"| Rows | {len(df):,} |")
+    lines.append(f"| Columns | {len(df.columns)} |")
 
-    lines.append("| Column | Type | Missing values |")
-    lines.append("|---|---|---|")
     missing = df.isna().sum()
-    for col in df.columns:
-        miss = missing[col]
-        miss_str = f"{miss:,}" if miss > 0 else "—"
-        lines.append(f"| `{col}` | {df[col].dtype} | {miss_str} |")
+    missing_cols = [(col, int(c)) for col, c in missing.items() if c > 0]
+    if missing_cols:
+        missing_str = "; ".join(f"`{col}`: {c:,}" for col, c in missing_cols)
+    else:
+        missing_str = "None"
+    lines.append(f"| Missing values | {missing_str} |")
+
+    dup = int(df.duplicated().sum())
+    dup_str = f"{dup:,} fully duplicate row(s)" if dup else "None found"
+    lines.append(f"| Duplicates | {dup_str} |")
+
+    table = SOURCE_TABLE.get(display_name)
+    file_issues = [i for i in issues if i["table"] == table]
+    if file_issues:
+        problems_str = "; ".join(
+            f"{i['check']} ({i['rows_affected']:,})" for i in file_issues
+        )
+    else:
+        problems_str = "None found by the pipeline's validation checks."
+    lines.append(f"| Problems | {problems_str} |")
     lines.append("")
     return "\n".join(lines)
 
@@ -81,20 +104,21 @@ def main():
     out.append("**Source:** OULAD (Open University Learning Analytics Dataset)  ")
     out.append(f"**Format:** CSV, {len(REQUIRED_FILES)} files\n")
 
+    # Run the real transform + validate steps first so each per-file
+    # card below can show its actual "Problems" findings (invalid
+    # values, duplicate business keys, orphaned FKs) rather than just
+    # full-row duplicates.
+    clean = transform_all(raw)
+    validated, report = validate_all(clean)
+
+    out.append("## Source documents\n")
     for key, filename in REQUIRED_FILES.items():
-        out.append(profile_file(filename, raw[key]))
+        out.append(profile_file(filename, raw[key], report.issues))
 
     out.append("## Relationships between datasets\n")
     for left, right, key in RELATIONSHIPS:
         out.append(f"- `{left}` ↔ `{right}` on **{key}**")
     out.append("")
-
-    # Run the real transform + validate steps to get the pipeline's
-    # actual data-quality findings (this covers "invalid values" and
-    # "duplicate records" in the guideline's sense -- e.g. repeated
-    # business keys and out-of-range values, not just full-row dupes).
-    clean = transform_all(raw)
-    validated, report = validate_all(clean)
 
     out.append("## Validation findings (from the actual pipeline)\n")
     if report.issues:
