@@ -1,9 +1,20 @@
 """
 pipeline.py
 Orchestrates the complete ETL workflow:
-Extract -> Transform -> Validate -> Load
+Trigger -> pipeline.py -> Extract -> Transform -> Validate -> Load
 
-Run directly, or trigger on a schedule (Windows Task Scheduler / Cron).
+Run directly, or trigger on a schedule (Windows Task Scheduler / Cron
+-- see scripts/run_pipeline.bat and scripts/run_pipeline.sh).
+
+Handles expected errors explicitly rather than letting a raw
+traceback reach the person running it:
+  - missing input file        (extract.py raises FileNotFoundError)
+  - database connection failure (load.py raises OperationalError)
+  - empty dataset             (load.py raises ValueError if every
+                                 validated table is empty)
+  - invalid data               (validate.py never raises -- it
+                                 removes and reports bad rows instead,
+                                 so the pipeline can still complete)
 """
 
 import sys
@@ -34,26 +45,33 @@ log = logging.getLogger("pipeline")
 
 def run(apply_schema: bool = True) -> dict:
     started = datetime.now()
-    log.info("=== Pipeline run started ===")
+    log.info("Pipeline started")
 
-    log.info("Step 1/4: Extract")
-    raw = extract_all()
+    try:
+        raw = extract_all()
+    except FileNotFoundError as e:
+        log.error(f"Pipeline stopped: missing input file. {e}")
+        raise
+    log.info("Data extracted")
 
-    log.info("Step 2/4: Transform")
     clean = transform_all(raw)
+    log.info("Transformation completed")
 
-    log.info("Step 3/4: Validate")
     validated, report = validate_all(clean)
+    log.info("Validation completed")
     log.info(report.summary())
 
-    log.info("Step 4/4: Load")
-    load_results = load_all(
-        validated,
-        schema_path=str(SCHEMA_PATH) if apply_schema else None,
-    )
+    try:
+        load_results = load_all(
+            validated,
+            schema_path=str(SCHEMA_PATH) if apply_schema else None,
+        )
+    except Exception as e:
+        log.error(f"Pipeline stopped during load: {e}")
+        raise
 
     duration = (datetime.now() - started).total_seconds()
-    log.info(f"=== Pipeline run finished in {duration:.2f}s ===")
+    log.info(f"Pipeline completed in {duration:.2f}s")
 
     return {
         "validation_report": report,
@@ -63,4 +81,8 @@ def run(apply_schema: bool = True) -> dict:
 
 
 if __name__ == "__main__":
-    run()
+    try:
+        run()
+    except Exception:
+        log.error("Pipeline run FAILED -- see error above for the cause.")
+        sys.exit(1)

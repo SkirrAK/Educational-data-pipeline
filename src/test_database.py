@@ -4,22 +4,12 @@ A small standalone check that Python can connect to PostgreSQL.
 Run this before src/load.py to confirm the database is reachable.
 """
 
-import os
-from sqlalchemy import create_engine, text
-
-DB_CONFIG = {
-    "host": os.environ.get("PGHOST", "localhost"),
-    "port": os.environ.get("PGPORT", "5432"),
-    "dbname": os.environ.get("PGDATABASE", "educational_analytics"),
-    "user": os.environ.get("PGUSER", "postgres"),
-    "password": os.environ.get("PGPASSWORD", "admin123"),
-}
+from sqlalchemy import text
+from config import DB_CONFIG, get_engine
 
 
 def main():
-    url = (f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-           f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
-    engine = create_engine(url)
+    engine = get_engine()
     try:
         with engine.connect() as conn:
             version = conn.execute(text("SELECT version();")).scalar()

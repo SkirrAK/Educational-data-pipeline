@@ -33,6 +33,13 @@ def extract_all(raw_dir: Path = RAW_DIR) -> dict[str, pd.DataFrame]:
                 f"Place the OULAD CSV files in {raw_dir}."
             )
         df = pd.read_csv(path)
+        if len(df) == 0:
+            import logging
+            logging.getLogger("pipeline.extract").warning(
+                f"{filename} was read successfully but contains 0 rows -- "
+                f"an empty dataset. Downstream steps will run but will have "
+                f"nothing to process for this file."
+            )
         frames[name] = df
         print(f"[extract] {filename}: {len(df)} records, columns={list(df.columns)}")
     return frames

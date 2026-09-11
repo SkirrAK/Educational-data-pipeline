@@ -4,26 +4,17 @@ Validated DataFrame -> Database connection -> PostgreSQL -> Tables.
 Reports: successful connection, target table, records inserted, errors encountered.
 """
 
-import os
+import logging
 import pandas as pd
-from sqlalchemy import create_engine, text
+from sqlalchemy import text
+from sqlalchemy.exc import OperationalError, SQLAlchemyError
 
-DB_CONFIG = {
-    "host": os.environ.get("PGHOST", "localhost"),
-    "port": os.environ.get("PGPORT", "5432"),
-    "dbname": os.environ.get("PGDATABASE", "educational_analytics"),
-    "user": os.environ.get("PGUSER", "postgres"),
-    "password": os.environ.get("PGPASSWORD", "admin123"),
-}
+from config import DB_CONFIG, get_engine
+
+log = logging.getLogger("pipeline.load")
 
 # Load order matters: parents before children (FK dependencies)
 LOAD_ORDER = ["courses", "students", "enrollments", "assessments", "results"]
-
-
-def get_engine():
-    url = (f"postgresql+psycopg2://{DB_CONFIG['user']}:{DB_CONFIG['password']}"
-           f"@{DB_CONFIG['host']}:{DB_CONFIG['port']}/{DB_CONFIG['dbname']}")
-    return create_engine(url)
 
 
 def apply_schema(engine, schema_path: str):
@@ -34,18 +25,38 @@ def apply_schema(engine, schema_path: str):
             statement = statement.strip()
             if statement:
                 conn.execute(text(statement))
-    print(f"[load] schema applied from {schema_path}")
+    log.info(f"Schema applied from {schema_path}")
 
 
 def load_all(validated: dict, engine=None, schema_path: str = None) -> dict:
+    """
+    Loads validated tables into PostgreSQL in FK-safe order.
+    Raises a clear, actionable error (rather than a raw traceback)
+    for the two expected failure modes: no DB connection, and an
+    entirely empty validated dataset.
+    """
     engine = engine or get_engine()
+
     try:
-        with engine.connect() as conn:
+        with engine.connect():
             pass
-        print(f"[load] connected to {DB_CONFIG['dbname']} at {DB_CONFIG['host']}:{DB_CONFIG['port']}")
-    except Exception as e:
-        print(f"[load] connection FAILED: {e}")
+        log.info(f"Database connection successful ({DB_CONFIG['dbname']} at "
+                  f"{DB_CONFIG['host']}:{DB_CONFIG['port']})")
+    except OperationalError as e:
+        log.error(
+            f"Database connection FAILED for {DB_CONFIG['dbname']} at "
+            f"{DB_CONFIG['host']}:{DB_CONFIG['port']}. Is PostgreSQL running, "
+            f"and are PGHOST/PGPORT/PGUSER/PGPASSWORD correct? Detail: {e}"
+        )
         raise
+
+    if all(len(df) == 0 for df in validated.values()):
+        log.error(
+            "All validated tables are empty -- nothing to load. This usually "
+            "means every row was rejected during validation, or the source "
+            "files in data/raw/ were empty. Refusing to load an empty dataset."
+        )
+        raise ValueError("Empty dataset: no valid records to load in any table.")
 
     if schema_path:
         apply_schema(engine, schema_path)
@@ -56,14 +67,20 @@ def load_all(validated: dict, engine=None, schema_path: str = None) -> dict:
         try:
             df.to_sql(table, engine, if_exists="append", index=False)
             results[table] = {"status": "ok", "records_inserted": len(df)}
-            print(f"[load] {table}: {len(df)} records inserted")
+            log.info(f"Records loaded -- {table}: {len(df)} records")
         except Exception as e:
+            # Broad except deliberately: pandas.to_sql wraps the underlying
+            # SQLAlchemyError in its own pandas.errors.DatabaseError, which
+            # does not inherit from SQLAlchemyError, so catching only that
+            # type let real failures (e.g. FK violations) crash the whole
+            # run instead of being recorded per-table as intended.
             results[table] = {"status": "error", "error": str(e)}
-            print(f"[load] {table}: ERROR - {e}")
+            log.error(f"Failed loading table '{table}': {e}")
     return results
 
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(message)s")
     from extract import extract_all
     from transform import transform_all
     from validate import validate_all

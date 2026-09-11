@@ -70,3 +70,4 @@ CREATE INDEX idx_enrollments_student ON enrollments(id_student);
 CREATE INDEX idx_enrollments_course ON enrollments(code_module, code_presentation);
 CREATE INDEX idx_results_student ON results(id_student);
 CREATE INDEX idx_results_assessment ON results(id_assessment);
+CREATE INDEX idx_assessments_course ON assessments(code_module, code_presentation);
